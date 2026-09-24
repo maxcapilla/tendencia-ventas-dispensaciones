@@ -85,12 +85,80 @@
     }
 
     async function loadPanelData(code) {
-      const response = await fetch("data/panel-2026-09.json?v=20260922-3", { cache: "no-store" });
+      const response = await fetch("data/panel-2026-09.json?v=20260924-complete-1", { cache: "no-store" });
       if (!response.ok) throw new Error("No se pudo cargar datos adicionales");
       return decryptPayloadObject(await response.json(), code);
     }
 
+    // Reject truncated payloads instead of displaying totals with empty detail tables.
+    function validatePanelDetails(data) {
+      const fail = () => { throw new Error("Los detalles de productos están incompletos o no coinciden con sus totales."); };
+      const statuses = ["Sobre PVMP", "En PVMP", "Bajo PVMP"];
+      if (!data.pvmp || !Array.isArray(data.pvmp.detail) || !Array.isArray(data.pvmp.pending) ||
+          !data.cross || !Array.isArray(data.cross.detail)) fail();
+      const seenPrices = new Set();
+      data.pvmp.detail.concat(data.pvmp.pending).forEach(x => {
+        const key = x.store + ":" + x.id;
+        if (!["Rodoviario", "Von Schroeders"].includes(x.store) || !x.id || !x.product || !x.isp ||
+            !x.pvmp_status || !Number.isFinite(x.sale) || seenPrices.has(key)) fail();
+        seenPrices.add(key);
+      });
+      data.pvmp.detail.forEach(x => {
+        if (!statuses.includes(x.pvmp_status) || !Number.isFinite(x.pvmp) || x.pvmp <= 0 ||
+            !Number.isFinite(x.diff) || !Number.isFinite(x.diff_pct) || x.diff !== x.sale - x.pvmp ||
+            x.pvmp_status !== (x.diff > 0 ? "Sobre PVMP" : x.diff < 0 ? "Bajo PVMP" : "En PVMP") ||
+            Math.abs(x.diff_pct - x.diff / x.pvmp * 100) > 0.011) fail();
+      });
+      data.pvmp.pending.forEach(x => {
+        if (statuses.includes(x.pvmp_status) || x.diff !== null || x.diff_pct !== null ||
+            !Array.isArray(x.pvmp_options) || !x.pvmp_options.length ||
+            x.pvmp_options.some(n => !Number.isFinite(n) || n <= 0)) fail();
+      });
+      ["Rodoviario", "Von Schroeders"].forEach(store => {
+        const summary = data.pvmp[store];
+        if (!summary) fail();
+        const rows = data.pvmp.detail.concat(data.pvmp.pending).filter(x => x.store === store);
+        const keys = new Set(statuses.concat(Object.keys(summary), rows.map(x => x.pvmp_status)));
+        keys.forEach(status => {
+          const count = summary[status] || 0;
+          if (!Number.isInteger(count) || count < 0) fail();
+          if (status !== "Sin PVMP" && rows.filter(x => x.pvmp_status === status).length !== count) fail();
+        });
+        if (Object.values(summary).reduce((a,b) => a+b, 0) !== data.products[store]) fail();
+      });
+      const seenStock = new Set();
+      data.cross.detail.forEach(x => {
+        if (!x.id || !x.product || !x.product_class || !Number.isFinite(x.rod) || !Number.isFinite(x.vs) || seenStock.has(x.id)) fail();
+        seenStock.add(x.id);
+        if (!(x.type === "Sin stock Rodoviario" && x.rod <= 0 && x.vs > 0) &&
+            !(x.type === "Sin stock Von Schroeders" && x.vs <= 0 && x.rod > 0)) fail();
+      });
+      [["Rodoviario", "rod_missing"], ["Von Schroeders", "vs_missing"]].forEach(([store,key]) => {
+        const rows = data.cross.detail.filter(x => x.type === "Sin stock " + store);
+        if (rows.length !== data.cross[key] || rows.filter(x => x.product_class === "MEDICAMENTO").length !== data.cross[key + "_medicines"]) fail();
+      });
+      return data;
+    }
+
+    function bindPanelDetails() {
+      document.querySelectorAll("[data-pf-target]").forEach(button => {
+        button.addEventListener("click", () => {
+          const detail = document.getElementById(button.dataset.pfTarget);
+          if (!detail) return;
+          const open = detail.classList.toggle("open");
+          button.setAttribute("aria-expanded", String(open));
+          button.textContent = open ? "Ocultar productos" : "Ver productos";
+          if (open) {
+            detail.scrollIntoView({ block: "start" });
+            detail.focus({ preventScroll: true });
+          }
+        });
+      });
+    }
+
     function enhanceHistoricalDashboard(html, data) {
+      validatePanelDetails(data);
+      const escapeHtml = value => String(value == null ? "" : value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
       const fmt = n => new Intl.NumberFormat("es-CL").format(Math.round(n || 0));
       const money = n => "$" + fmt(n);
       const r = data.sales.Rodoviario;
@@ -111,7 +179,7 @@
         '.pf-wrap{max-width:1280px;margin:18px auto;padding:0 16px;font-family:Segoe UI,Arial,sans-serif}.pf-wrap h2{color:#0f2744;margin:0 0 6px}.pf-muted{color:#66758a;font-size:13px;margin-bottom:12px}' +
         '.pf-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.pf-card{background:#fff;border:1px solid #dce4ed;border-radius:12px;padding:16px;box-shadow:0 5px 16px rgba(28,53,84,.05)}' +
         '.pf-l{font-size:12px;color:#66758a;text-transform:uppercase;font-weight:800}.pf-v{font-size:24px;color:#17263a;font-weight:850;margin-top:5px}.pf-s{font-size:12px;color:#66758a;margin-top:4px}' +
-        '.pf-red .pf-v{color:#a72e2e}.pf-green .pf-v{color:#157347}.pf-amber .pf-v{color:#956300}.pf-section{margin-top:30px}.pf-table-wrap{overflow:auto;max-height:520px;border:1px solid #dce4ed;border-radius:12px;background:#fff}.pf-table{width:100%;border-collapse:collapse;font-size:13px}.pf-table th{position:sticky;top:0;background:#1b3a6b;color:#fff;padding:10px;text-align:left}.pf-table td{padding:9px;border-bottom:1px solid #edf1f5}.pf-btn{margin-top:8px;border:1px solid #c9d5e2;background:#fff;border-radius:8px;padding:7px 10px;cursor:pointer;font-weight:700}.pf-detail{display:none;margin-top:12px}.pf-detail.open{display:block}' +
+        '.pf-red .pf-v{color:#a72e2e}.pf-green .pf-v{color:#157347}.pf-amber .pf-v{color:#956300}.pf-section{margin-top:30px}.pf-table-wrap{overflow:auto;max-height:520px;border:1px solid #dce4ed;border-radius:12px;background:#fff}.pf-table{width:100%;border-collapse:collapse;font-size:13px}.pf-table th{position:sticky;top:0;background:#1b3a6b;color:#fff;padding:10px;text-align:left}.pf-table td{padding:9px;border-bottom:1px solid #edf1f5}.pf-btn{margin-top:8px;border:1px solid #c9d5e2;background:#fff;border-radius:8px;padding:7px 10px;cursor:pointer;font-weight:700}.pf-detail{display:none;margin-top:12px;scroll-margin-top:110px}.pf-detail:focus{outline:2px solid #2563c7}.pf-btn{color:#17263a}.pf-empty{text-align:center;color:#66758a}.pf-pending{margin-top:18px}.pf-pending summary{cursor:pointer;font-weight:700;padding:12px 0}.pf-table th{z-index:1}.pf-table td{white-space:normal;text-align:left}.pf-table td:first-child{font-weight:400}.pf-section{scroll-margin-top:110px}.pf-detail.open{display:block}' +
         '@media(max-width:850px){.pf-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:520px){.pf-grid{grid-template-columns:1fr}}' +
         '</style>';
       html = html.replace('</head>', style + '</head>');
@@ -126,9 +194,11 @@
         '</div></section><div id="pf-historico"></div>';
       html = html.replace(/<body([^>]*)>/i, function(match){ return match + current; });
 
+      const missingR = data.cross.detail.filter(x => x.type === "Sin stock Rodoviario");
+      const missingV = data.cross.detail.filter(x => x.type === "Sin stock Von Schroeders");
       function crossTable(rows) {
-        return '<div class="pf-table-wrap"><table class="pf-table"><thead><tr><th>ID</th><th>Producto</th><th>Stock Rodoviario</th><th>Stock Von Schroeders</th></tr></thead><tbody>' +
-          rows.map(function(x){ return '<tr><td>'+x.id+'</td><td>'+x.product+'</td><td>'+fmt(x.rod)+'</td><td>'+fmt(x.vs)+'</td></tr>'; }).join('') +
+        return '<p class="pf-muted">'+fmt(rows.length)+' productos · stock total por ID, sumando todos los lotes. Sin stock: total menor o igual a cero.</p><div class="pf-table-wrap"><table class="pf-table"><thead><tr><th>ID</th><th>Producto</th><th>Clase</th><th>Stock Rodoviario</th><th>Stock Von Schroeders</th></tr></thead><tbody>' +
+          (rows.map(function(x){ return '<tr><td>'+escapeHtml(x.id)+'</td><td>'+escapeHtml(x.product)+'</td><td>'+escapeHtml(x.product_class)+'</td><td>'+fmt(x.rod)+'</td><td>'+fmt(x.vs)+'</td></tr>'; }).join('') || '<tr><td class="pf-empty" colspan="5">No hay productos en esta situación.</td></tr>') +
           '</tbody></table></div>';
       }
 
@@ -137,9 +207,12 @@
         return '<div class="pf-card"><div class="pf-l">Vence '+b+'</div><div class="pf-v">'+fmt(n)+'</div><div class="pf-s">productos con stock</div></div>';
       }).join('');
 
-      const comparable = (data.pvmp.detail || []).map(function(x){
-        return '<tr><td>'+x.store+'</td><td>'+x.product+'</td><td>'+(x.isp||'')+'</td><td>'+money(x.sale)+'</td><td>'+money(x.pvmp)+'</td><td>'+money(x.diff)+' ('+(x.diff_pct == null ? '' : x.diff_pct)+'%)</td><td>'+x.pvmp_status+'</td></tr>';
-      }).join('');
+      const comparable = data.pvmp.detail.map(function(x){
+        return '<tr><td>'+escapeHtml(x.store)+'</td><td>'+escapeHtml(x.id)+'</td><td>'+escapeHtml(x.product)+'</td><td>'+escapeHtml(x.isp)+'</td><td>'+money(x.sale)+'</td><td>'+money(x.pvmp)+'</td><td>'+money(x.diff)+' ('+new Intl.NumberFormat("es-CL", {maximumFractionDigits:2}).format(x.diff_pct)+'%)</td><td>'+escapeHtml(x.pvmp_status)+'</td></tr>';
+      }).join('') || '<tr><td class="pf-empty" colspan="8">No hay productos comparables en este período.</td></tr>';
+      const pending = data.pvmp.pending.map(function(x){
+        return '<tr><td>'+escapeHtml(x.store)+'</td><td>'+escapeHtml(x.id)+'</td><td>'+escapeHtml(x.product)+'</td><td>'+escapeHtml(x.isp)+'</td><td>'+money(x.sale)+'</td><td>'+x.pvmp_options.map(money).join(' / ')+'</td><td>'+escapeHtml(x.pvmp_status)+'</td></tr>';
+      }).join('') || '<tr><td class="pf-empty" colspan="7">No hay comparaciones pendientes.</td></tr>';
 
       const modules =
         '<section class="pf-wrap pf-section" id="pf-pvmp"><h2>Precios PVMP</h2><div class="pf-grid">' +
@@ -147,16 +220,17 @@
         '<div class="pf-card pf-green"><div class="pf-l">En PVMP</div><div class="pf-v">'+fmt(equal)+'</div></div>' +
         '<div class="pf-card"><div class="pf-l">Bajo PVMP</div><div class="pf-v">'+fmt(under)+'</div></div>' +
         '<div class="pf-card pf-amber"><div class="pf-l">Fraccionados pendientes</div><div class="pf-v">'+fmt(frac)+'</div><div class="pf-s">normalizar unidad antes de comparar</div></div>' +
-        '</div><h3>Productos comparables</h3><div class="pf-table-wrap"><table class="pf-table"><thead><tr><th>Farmacia</th><th>Producto</th><th>Registro ISP</th><th>Precio</th><th>PVMP</th><th>Diferencia</th><th>Estado</th></tr></thead><tbody>'+comparable+'</tbody></table></div></section>' +
+        '</div><h3>Productos comparables</h3><p class="pf-muted">'+fmt(data.pvmp.detail.length)+' registros de producto por farmacia. Cruce exacto por Registro ISP; los fraccionados y PVMP múltiples se muestran aparte.</p><div class="pf-table-wrap"><table class="pf-table"><thead><tr><th>Farmacia</th><th>ID</th><th>Producto</th><th>Registro ISP</th><th>Precio</th><th>PVMP</th><th>Diferencia</th><th>Estado</th></tr></thead><tbody>'+comparable+'</tbody></table></div>' +
+        '<details class="pf-pending"><summary>Ver comparaciones pendientes ('+fmt(data.pvmp.pending.length)+')</summary><p class="pf-muted">No se calculan diferencias hasta confirmar la unidad de venta o el PVMP aplicable. Los importes Cenabast conservan la presentación de origen.</p><div class="pf-table-wrap"><table class="pf-table"><thead><tr><th>Farmacia</th><th>ID</th><th>Producto</th><th>Registro ISP</th><th>Precio</th><th>PVMP de origen</th><th>Motivo</th></tr></thead><tbody>'+pending+'</tbody></table></div></details></section>' +
         '<section class="pf-wrap pf-section" id="pf-inventario"><h2>Inventario</h2><div class="pf-grid">' +
         '<div class="pf-card"><div class="pf-l">Valor inventario a costo</div><div class="pf-v">'+money(inventory)+'</div><div class="pf-s">Rodoviario '+money(data.inventory.Rodoviario)+' · Von Schroeders '+money(data.inventory["Von Schroeders"])+'</div></div>' +
-        '<div class="pf-card"><div class="pf-l">Sin stock Rodoviario</div><div class="pf-v">'+fmt(data.cross.rod_missing)+'</div><div class="pf-s">disponibles en Von Schroeders</div><button class="pf-btn" onclick="document.getElementById(\'pf-cross-r\').classList.toggle(\'open\')">Ver productos</button></div>' +
-        '<div class="pf-card"><div class="pf-l">Sin stock Von Schroeders</div><div class="pf-v">'+fmt(data.cross.vs_missing)+'</div><div class="pf-s">disponibles en Rodoviario</div><button class="pf-btn" onclick="document.getElementById(\'pf-cross-v\').classList.toggle(\'open\')">Ver productos</button></div>' +
+        '<div class="pf-card"><div class="pf-l">Sin stock Rodoviario</div><div class="pf-v">'+fmt(data.cross.rod_missing)+'</div><div class="pf-s">disponibles en Von Schroeders · '+fmt(data.cross.rod_missing_medicines)+' medicamentos</div><button type="button" class="pf-btn" data-pf-target="pf-cross-r" aria-controls="pf-cross-r" aria-expanded="false">Ver productos</button></div>' +
+        '<div class="pf-card"><div class="pf-l">Sin stock Von Schroeders</div><div class="pf-v">'+fmt(data.cross.vs_missing)+'</div><div class="pf-s">disponibles en Rodoviario · '+fmt(data.cross.vs_missing_medicines)+' medicamentos</div><button type="button" class="pf-btn" data-pf-target="pf-cross-v" aria-controls="pf-cross-v" aria-expanded="false">Ver productos</button></div>' +
         '<div class="pf-card"><div class="pf-l">Registro ISP pendiente</div><div class="pf-v">'+fmt(data.isp.without)+'</div><div class="pf-s">'+fmt(data.isp.with)+' productos ya informados</div></div>' +
-        '</div><h3>Vencimientos</h3><div class="pf-grid">'+exp+'</div>' +
-        '<div id="pf-cross-r" class="pf-detail"><h3>Sin stock Rodoviario · disponible en Von Schroeders</h3>'+crossTable((data.cross.detail||[]).filter(function(x){return x.type==="Sin stock Rodoviario";}))+'</div>' +
-        '<div id="pf-cross-v" class="pf-detail"><h3>Sin stock Von Schroeders · disponible en Rodoviario</h3>'+crossTable((data.cross.detail||[]).filter(function(x){return x.type==="Sin stock Von Schroeders";}))+'</div>' +
-        '</section>';
+        '</div>' +
+        '<div id="pf-cross-r" class="pf-detail" tabindex="-1" role="region" aria-label="Productos sin stock en Rodoviario"><h3>Sin stock Rodoviario · disponible en Von Schroeders</h3>'+crossTable(missingR)+'</div>' +
+        '<div id="pf-cross-v" class="pf-detail" tabindex="-1" role="region" aria-label="Productos sin stock en Von Schroeders"><h3>Sin stock Von Schroeders · disponible en Rodoviario</h3>'+crossTable(missingV)+'</div>' +
+        '<h3>Vencimientos</h3><div class="pf-grid">'+exp+'</div></section>';
       return html.replace(/<\/body>/i, modules + '</body>');
     }
 
@@ -172,10 +246,12 @@
           html = enhanceHistoricalDashboard(html, panelData);
         } catch (extraError) {
           console.warn("Se mantiene dashboard histórico sin módulos adicionales.", extraError);
+          html = html.replace(/<body([^>]*)>/i, match => match + '<p role="alert" style="padding:16px;margin:16px;border:1px solid #b23a32;background:#fff4f2;color:#812820">No se pudieron cargar los detalles de precios e inventario. Recarga la página para volver a intentarlo. El histórico de ventas sigue disponible.</p>');
         }
         document.open();
         document.write(html);
         document.close();
+        bindPanelDetails();
       } catch {
         message.textContent = "Código incorrecto. Comprueba los caracteres e inténtalo nuevamente.";
         button.disabled = false;
