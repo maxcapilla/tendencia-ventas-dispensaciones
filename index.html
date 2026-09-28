@@ -87,7 +87,11 @@
     async function loadPanelData(code) {
       const response = await fetch("data/panel-2026-09.json?v=20260924-complete-1", { cache: "no-store" });
       if (!response.ok) throw new Error("No se pudo cargar datos adicionales");
-      return decryptPayloadObject(await response.json(), code);
+      const data = await decryptPayloadObject(await response.json(), code);
+      const coverageResponse = await fetch("data/pvmp-coverage-2026-09.json?v=1", { cache: "no-store" });
+      if (!coverageResponse.ok) throw new Error("No se pudo cargar el desglose PVMP");
+      data.pvmp.master_without_pvmp = await decryptPayloadObject(await coverageResponse.json(), code);
+      return data;
     }
 
     // Reject truncated payloads instead of displaying totals with empty detail tables.
@@ -96,6 +100,11 @@
       const statuses = ["Sobre PVMP", "En PVMP", "Bajo PVMP"];
       if (!data.pvmp || !Array.isArray(data.pvmp.detail) || !Array.isArray(data.pvmp.pending) ||
           !data.cross || !Array.isArray(data.cross.detail)) fail();
+      // This snapshot counts unique products in the master list, not rows per pharmacy.
+      const coverage = data.pvmp.master_without_pvmp;
+      if (coverage != null &&
+          (![coverage.total, coverage.with_isp_without_match, coverage.without_isp].every(n => Number.isSafeInteger(n) && n >= 0) ||
+           coverage.total !== coverage.with_isp_without_match + coverage.without_isp)) fail();
       const seenPrices = new Set();
       data.pvmp.detail.concat(data.pvmp.pending).forEach(x => {
         const key = x.store + ":" + x.id;
@@ -179,6 +188,7 @@
         '.pf-wrap{max-width:1280px;margin:18px auto;padding:0 16px;font-family:Segoe UI,Arial,sans-serif}.pf-wrap h2{color:#0f2744;margin:0 0 6px}.pf-muted{color:#66758a;font-size:13px;margin-bottom:12px}' +
         '.pf-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.pf-card{background:#fff;border:1px solid #dce4ed;border-radius:12px;padding:16px;box-shadow:0 5px 16px rgba(28,53,84,.05)}' +
         '.pf-l{font-size:12px;color:#66758a;text-transform:uppercase;font-weight:800}.pf-v{font-size:24px;color:#17263a;font-weight:850;margin-top:5px}.pf-s{font-size:12px;color:#66758a;margin-top:4px}' +
+        '.pf-pvmp-coverage{margin:16px 0;border-color:#d6b46b;background:#fffcf5;overflow:hidden}.pf-pvmp-coverage>summary{padding:18px;cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#17263a}.pf-pvmp-coverage>summary::-webkit-details-marker{display:none}.pf-pvmp-coverage>summary:hover{background:#fff5dc}.pf-pvmp-coverage>summary:focus-visible{outline:3px solid #2563c7;outline-offset:-3px}.pf-pvmp-title{font-size:18px;font-weight:700}.pf-pvmp-total{font-size:32px;color:#956300;margin-right:8px}.pf-pvmp-action{font-size:13px;font-weight:700;text-decoration:underline}.pf-pvmp-coverage .pf-pvmp-hide{display:none}.pf-pvmp-coverage[open] .pf-pvmp-show{display:none}.pf-pvmp-coverage[open] .pf-pvmp-hide{display:inline}.pf-pvmp-breakdown{padding:0 18px 18px}.pf-pvmp-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.pf-pvmp-groups p{margin:6px 0 0;font-size:14px;color:#17263a}@media(max-width:520px){.pf-pvmp-groups{grid-template-columns:1fr}}' +
         '.pf-red .pf-v{color:#a72e2e}.pf-green .pf-v{color:#157347}.pf-amber .pf-v{color:#956300}.pf-section{margin-top:30px}.pf-table-wrap{overflow:auto;max-height:520px;border:1px solid #dce4ed;border-radius:12px;background:#fff}.pf-table{width:100%;border-collapse:collapse;font-size:13px}.pf-table th{position:sticky;top:0;background:#1b3a6b;color:#fff;padding:10px;text-align:left}.pf-table td{padding:9px;border-bottom:1px solid #edf1f5}.pf-btn{margin-top:8px;border:1px solid #c9d5e2;background:#fff;border-radius:8px;padding:7px 10px;cursor:pointer;font-weight:700}.pf-detail{display:none;margin-top:12px;scroll-margin-top:110px}.pf-detail:focus{outline:2px solid #2563c7}.pf-btn{color:#17263a}.pf-empty{text-align:center;color:#66758a}.pf-pending{margin-top:18px}.pf-pending summary{cursor:pointer;font-weight:700;padding:12px 0}.pf-table th{z-index:1}.pf-table td{white-space:normal;text-align:left}.pf-table td:first-child{font-weight:400}.pf-section{scroll-margin-top:110px}.pf-detail.open{display:block}' +
         '@media(max-width:850px){.pf-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:520px){.pf-grid{grid-template-columns:1fr}}' +
         '</style>';
@@ -214,8 +224,16 @@
         return '<tr><td>'+escapeHtml(x.store)+'</td><td>'+escapeHtml(x.id)+'</td><td>'+escapeHtml(x.product)+'</td><td>'+escapeHtml(x.isp)+'</td><td>'+money(x.sale)+'</td><td>'+x.pvmp_options.map(money).join(' / ')+'</td><td>'+escapeHtml(x.pvmp_status)+'</td></tr>';
       }).join('') || '<tr><td class="pf-empty" colspan="7">No hay comparaciones pendientes.</td></tr>';
 
+      const coverage = data.pvmp.master_without_pvmp;
+      const coverageCard = coverage == null ? '' :
+        '<details class="pf-card pf-pvmp-coverage" style="padding:0" id="pf-pvmp-coverage"><summary aria-controls="pf-pvmp-breakdown"><span class="pf-pvmp-title"><strong class="pf-pvmp-total">'+fmt(coverage.total)+'</strong> medicamentos fuera del PVMP</span><span class="pf-pvmp-action"><span class="pf-pvmp-show">Ver desglose</span><span class="pf-pvmp-hide">Ocultar desglose</span></span></summary>' +
+        '<div class="pf-pvmp-breakdown" id="pf-pvmp-breakdown"><p class="pf-muted">Consolidado de productos únicos de Rodoviario y Von Schroeders · maestra de septiembre 2026.</p><div class="pf-pvmp-groups">' +
+        '<div class="pf-card"><div class="pf-v">'+fmt(coverage.with_isp_without_match)+'</div><p>productos con Registro ISP pero sin registro/coincidencia en PVMP</p></div>' +
+        '<div class="pf-card"><div class="pf-v">'+fmt(coverage.without_isp)+'</div><p>productos sin Registro ISP</p></div></div>' +
+        '<p class="pf-muted">Los productos sin Registro ISP quedan pendientes de identificar; aún no se puede determinar si tienen coincidencia en PVMP.</p></div></details>';
+
       const modules =
-        '<section class="pf-wrap pf-section" id="pf-pvmp"><h2>Precios PVMP</h2><div class="pf-grid">' +
+        '<section class="pf-wrap pf-section" id="pf-pvmp"><h2>Precios PVMP</h2>'+coverageCard+'<div class="pf-grid">' +
         '<div class="pf-card pf-red"><div class="pf-l">Sobre PVMP</div><div class="pf-v">'+fmt(over)+'</div><div class="pf-s">cruce exacto por Registro ISP</div></div>' +
         '<div class="pf-card pf-green"><div class="pf-l">En PVMP</div><div class="pf-v">'+fmt(equal)+'</div></div>' +
         '<div class="pf-card"><div class="pf-l">Bajo PVMP</div><div class="pf-v">'+fmt(under)+'</div></div>' +

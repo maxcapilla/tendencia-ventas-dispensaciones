@@ -65,6 +65,27 @@ test('valid empty data displays explicit empty states', () => {
   assert.ok(result.includes('No hay productos comparables'));
   assert.equal((result.match(/No hay productos en esta situación/g)||[]).length,2);
 });
+
+test('master coverage validates its breakdown without changing existing modules', () => {
+  const data = fixture();
+  const historical = '<html><head></head><body><main>Historical chart</main></body></html>';
+  const before = context.enhanceHistoricalDashboard(historical, data);
+  data.pvmp.master_without_pvmp = {total:7, with_isp_without_match:5, without_isp:2};
+  const after = context.enhanceHistoricalDashboard(historical, data);
+  assert.ok(after.includes('>7</strong> medicamentos fuera del PVMP'));
+  assert.ok(after.includes('>5</div><p>productos con Registro ISP pero sin registro/coincidencia en PVMP'));
+  assert.ok(after.includes('>2</div><p>productos sin Registro ISP'));
+  assert.equal(after.replace(/<details class="pf-card pf-pvmp-coverage"[\s\S]*?<\/details>/, ''), before);
+  for (const coverage of [
+    {total:8, with_isp_without_match:5, without_isp:2},
+    {total:7, with_isp_without_match:8, without_isp:-1},
+    {total:7, with_isp_without_match:5.5, without_isp:1.5},
+    {total:7, with_isp_without_match:5},
+  ]) {
+    data.pvmp.master_without_pvmp = coverage;
+    assert.throws(() => context.validatePanelDetails(data));
+  }
+});
 test('protected historical payload is byte-identical to the pre-fix version', () => {
   const payload=html.match(/const protectedContent = (\{.*?\});/s)[1];
   assert.equal(crypto.createHash('sha256').update(payload).digest('hex'), '72e19dc3b9e96758aa3fed86e71c887a6938183a91ce77568c004ca385a90634');
@@ -79,4 +100,15 @@ test('published encrypted payload reconciles with its full detail', {skip:!proce
   context.validatePanelDetails(data);
   assert.ok(data.pvmp.detail.length > 0);
   assert.ok(data.cross.detail.length > 0);
+  const coveragePayload=JSON.parse(fs.readFileSync(path.join(__dirname,'../data/pvmp-coverage-2026-09.json'),'utf8'));
+  const coverageKey=crypto.pbkdf2Sync(process.env.PANEL_ACCESS_CODE.trim().toUpperCase(),Buffer.from(coveragePayload.salt,'base64'),coveragePayload.iterations,32,'sha256');
+  const coverageBytes=Buffer.from(coveragePayload.ciphertext,'base64');
+  const coverageDecipher=crypto.createDecipheriv('aes-256-gcm',coverageKey,Buffer.from(coveragePayload.iv,'base64'));
+  coverageDecipher.setAuthTag(coverageBytes.subarray(-16));
+  data.pvmp.master_without_pvmp=JSON.parse(Buffer.concat([coverageDecipher.update(coverageBytes.subarray(0,-16)),coverageDecipher.final()]).toString());
+  context.validatePanelDetails(data);
+  assert.deepEqual(
+    Object.fromEntries(['total','with_isp_without_match','without_isp'].map(key => [key, data.pvmp.master_without_pvmp[key]])),
+    {total:554, with_isp_without_match:433, without_isp:121}
+  );
 });
