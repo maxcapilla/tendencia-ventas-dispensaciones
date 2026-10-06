@@ -201,6 +201,7 @@
         '<div class="pf-card"><div class="pf-l">Dispensaciones SEP26</div><div class="pf-v">' + fmt(totalDisp) + '</div><div class="pf-s">Rodoviario ' + fmt(r.dispensations) + ' · Von Schroeders ' + fmt(v.dispensations) + '</div></div>' +
         '<div class="pf-card"><div class="pf-l">Boleta promedio SEP26</div><div class="pf-v">' + money(totalAvg) + '</div><div class="pf-s">Rodoviario ' + money(r.avg_ticket) + ' · Von Schroeders ' + money(v.avg_ticket) + '</div></div>' +
         '<div class="pf-card"><div class="pf-l">Corte de información</div><div class="pf-v">21/09</div><div class="pf-s">No comparar como mes cerrado</div></div>' +
+        '<div class="pf-card" id="pf-productos-rodoviario"><div class="pf-l">Productos disponibles en Rodoviario</div><div class="pf-v">697</div><div class="pf-s">Productos únicos · maestra de septiembre 2026</div></div>' +
         '</div></section><div id="pf-historico"></div>';
       html = html.replace(/<body([^>]*)>/i, function(match){ return match + current; });
 
